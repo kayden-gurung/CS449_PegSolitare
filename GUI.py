@@ -1,7 +1,10 @@
 import tkinter as tk
 from tkinter import messagebox
+from tkinter import filedialog, Toplevel, Text, Button, Scrollbar, RIGHT, Y, BOTH
 from board import validate_size
 from game import ManualGame, AutomatedGame
+import replay 
+
 
 
 
@@ -11,7 +14,9 @@ class SimpleGUIDemo:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Peg Solitaire")
-        self.root.geometry("520x750")
+        self.root.geometry("520x780")
+
+
 
         # variables for controls
         self.record_game = tk.BooleanVar(value=False)
@@ -19,13 +24,17 @@ class SimpleGUIDemo:
         self.game_mode = tk.StringVar(value="Manual")
         self.board_size = 7
 
-        # game object — starts as ManualGame
+
+        # game object, starts as ManualGame
         self.game = ManualGame(self.board_size, "English")
 
-        self._auto_job = None  # for automated game timer
+        self._auto_job = None
+        self._replay_job = None
+        self._start_grid = None
 
         self._build_ui()
         self._draw_board()
+        self._snapshot_start_grid()  # initial snapshot for the default game
 
     def _build_ui(self):
         # title
@@ -52,7 +61,11 @@ class SimpleGUIDemo:
         self.randomize_btn = tk.Button(controls_top, text="Randomize", command=self._randomize)
         self.randomize_btn.pack(side="left", padx=5)
 
-        # canvas — board drawn between the two lines
+        # load replay button
+        self.load_replay_btn = tk.Button(controls_top, text="Load Replay…", command=self._load_replay_dialog)
+        self.load_replay_btn.pack(side="left", padx=5)
+
+        # canvas, board drawn between the two lines
         self.canvas = tk.Canvas(self.root, width=480, height=480, bg="white", highlightthickness=1)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self._on_click)
@@ -61,7 +74,7 @@ class SimpleGUIDemo:
         options = tk.Frame(self.root)
         options.pack(pady=5, fill="x")
 
-        # left column — game mode
+        # left column, game mode
         left = tk.Frame(options)
         left.pack(side="left", padx=20, anchor="n")
 
@@ -70,7 +83,7 @@ class SimpleGUIDemo:
             rb = tk.Radiobutton(left, text=name, variable=self.game_mode, value=name, command=self._on_mode_change)
             rb.pack(anchor="w", padx=20)
 
-        # middle column — board type
+        # middle column, board type
         middle = tk.Frame(options)
         middle.pack(side="left", padx=20, anchor="n")
 
@@ -79,7 +92,7 @@ class SimpleGUIDemo:
             rb = tk.Radiobutton(middle, text=name, variable=self.board_type, value=name, command=self._on_board_type_change)
             rb.pack(anchor="w", padx=20)
 
-        # right column — checkbox
+        # right column, checkbox
         right = tk.Frame(options)
         right.pack(side="left", padx=20, anchor="n")
 
@@ -90,7 +103,9 @@ class SimpleGUIDemo:
         self.status = tk.Label(self.root, text="Status: Ready")
         self.status.pack(pady=10)
 
-    # ------ Drawing ------
+
+
+    # drawing
 
     def _draw_board(self):
         self.canvas.delete("all")
@@ -177,7 +192,10 @@ class SimpleGUIDemo:
         else:
             return "#d4c4a0", "#8b7340"
 
-    # ------ Click Handling ------
+
+
+
+    # click handling
 
     def _on_click(self, event):
         if not isinstance(self.game, ManualGame):
@@ -230,7 +248,16 @@ class SimpleGUIDemo:
             return best
         return None, None
 
-    # game ststeat
+
+
+
+    # recording helpers
+
+    def _snapshot_start_grid(self):
+        """Save a deep copy of the current board grid as the recording's start state."""
+        self._start_grid = [row[:] for row in self.game.board.grid]
+
+    # game state
 
     def _check_game_over(self):
         if self.game.has_won():
@@ -251,25 +278,146 @@ class SimpleGUIDemo:
         if not self.game.move_history:
             return
 
-        lines = []
-        for i, (fr, fc, tr, tc) in enumerate(self.game.move_history, 1):
-            lines.append(f"Move {i}: ({fr},{fc}) -> ({tr},{tc})")
-
         result = "WIN" if self.game.has_won() else f"LOSS ({self.game.peg_count()} pegs left)"
         mode = "Manual" if isinstance(self.game, ManualGame) else "Automated"
-        header = f"Game Record — {result}\n"
-        header += f"Mode: {mode}, Board: {self.game.board_type}, Size: {self.game.size}\n"
-        header += f"Total Moves: {len(self.game.move_history)}\n"
-        header += "-" * 30 + "\n"
 
-        messagebox.showinfo("Game Record", header + "\n".join(lines))
+        # Convert 4-tuple history to ((src),(dst)) format for replay module
+        moves = [((fr, fc), (tr, tc)) for fr, fc, tr, tc in self.game.move_history]
 
+        content = replay.format_record(
+            result=result,
+            mode=mode,
+            board_type=self.game.board_type,
+            size=self.game.size,
+            moves=moves,
+            start_grid=self._start_grid,
+        )
 
+        win = Toplevel(self.root)
+        win.title("Game Record")
+        win.geometry("400x520")
 
+        sb = Scrollbar(win)
+        sb.pack(side=RIGHT, fill=Y)
+        txt = Text(win, wrap="word", font=("Consolas", 10), yscrollcommand=sb.set)
+        txt.insert("1.0", content)
+        txt.config(state="disabled") 
+        txt.pack(fill=BOTH, expand=True)
+        sb.config(command=txt.yview)
 
+        def save():
+            path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt")],
+                title="Save Game Record",
+            )
+            if path:
+                replay.save_record(
+                    path=path,
+                    result=result,
+                    mode=mode,
+                    board_type=self.game.board_type,
+                    size=self.game.size,
+                    moves=moves,
+                    start_grid=self._start_grid,
+                )
+
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=4)
+        Button(btn_frame, text="Save Record…", command=save).pack(side="left", padx=4)
+        Button(btn_frame, text="OK", command=win.destroy).pack(side="left", padx=4)
+
+    # loading a replay
+
+    def _load_replay_dialog(self):
+        """Open a .txt replay file and play it back automatically."""
+        path = filedialog.askopenfilename(
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Load Replay",
+        )
+        if not path:
+            return
+
+        try:
+            meta, start_grid, moves = replay.load_replay(path)
+        except Exception as e:
+            messagebox.showerror("Load Replay", f"Could not read file:\n{e}")
+            return
+
+        if not moves:
+            messagebox.showerror("Load Replay", "No moves found in file.")
+            return
+
+        # cancel any running automated game or replay
+        self._stop_auto()
+        self._stop_replay()
+
+        # force manual mode
+        self.game_mode.set("Manual")
+
+        # apply board type from file if present
+        bt = meta.get("Board", self.board_type.get())
+        if bt in ("English", "Hexagon", "Diamond"):
+            self.board_type.set(bt)
+
+        # apply size from file if present and valid
+        try:
+            size = int(meta.get("Size", self.board_size))
+            if validate_size(size, bt):
+                self.board_size = size
+                self.size_entry.delete(0, tk.END)
+                self.size_entry.insert(0, str(size))
+        except (ValueError, TypeError):
+            pass
+
+        # reset to a fresh starting board
+        self.game = ManualGame(self.board_size, self.board_type.get())
+
+        if start_grid is not None:
+            self.game.board.grid = [row[:] for row in start_grid]
+
+        self._draw_board()
+        self.status.config(text=f"Status: Replaying {len(moves)} moves from file…")
+
+        # STRART PLAYBACK
+        self._replay_step(moves, 0)
+
+    def _replay_step(self, moves, i):
+        """Apply one move from the replay list, then schedule the next."""
+        if i >= len(moves):
+            self._draw_board()
+            self.status.config(text=f"Status: Replay complete ({len(moves)} moves)")
+            self._check_game_over()
+            return
+
+        (fr, fc), (tr, tc) = moves[i]
+
+        # attempt_move is click-based: first click selects, second click moves.
+        # make sure nothing is preselected, then perform the two clicks.
+        self.game.selected = None
+        self.game.attempt_move(fr, fc)
+        move_result = self.game.attempt_move(tr, tc)
+
+        if move_result != "moved":
+            messagebox.showerror(
+                "Replay Error",
+                f"Illegal move at step {i + 1}: ({fr},{fc}) -> ({tr},{tc})\n"
+                f"Stopping replay."
+            )
+            self._draw_board()
+            return
+
+        self._draw_board()
+        self.status.config(text=f"Status: Replay step {i + 1}/{len(moves)}")
+        self._replay_job = self.root.after(500, self._replay_step, moves, i + 1)
+
+    def _stop_replay(self):
+        if self._replay_job is not None:
+            self.root.after_cancel(self._replay_job)
+            self._replay_job = None
 
     # Automated Game
-    
+
     def _auto_step(self):
         """Play one automated move, then schedule the next."""
         if not isinstance(self.game, AutomatedGame):
@@ -296,6 +444,7 @@ class SimpleGUIDemo:
     def _new_game(self):
         """Reset with current settings."""
         self._stop_auto()
+        self._stop_replay()
         bt = self.board_type.get()
         mode = self.game_mode.get()
 
@@ -305,6 +454,7 @@ class SimpleGUIDemo:
             self.game = AutomatedGame(self.board_size, bt)
 
         self._draw_board()
+        self._snapshot_start_grid()  # capture standard starting board
         self.status.config(text="Status: New game started")
 
         if mode == "Automated":
@@ -316,6 +466,12 @@ class SimpleGUIDemo:
             self.status.config(text="Status: Randomize is only available in Manual mode")
             return
         self.game.randomize_board()
+
+        # Treat randomize as a fresh start: clear move history and snapshot the
+        # randomized state so replay starts from here.
+        self.game.move_history.clear()
+        self._snapshot_start_grid()
+
         pegs = self.game.peg_count()
         moves = len(self.game.get_valid_moves())
         self._draw_board()
@@ -325,6 +481,7 @@ class SimpleGUIDemo:
         """Handle game mode radio button change."""
         self._new_game()
 
+
     def _on_board_type_change(self):
         bt = self.board_type.get()
         if not validate_size(self.board_size, bt):
@@ -332,6 +489,7 @@ class SimpleGUIDemo:
             self.size_entry.delete(0, tk.END)
             self.size_entry.insert(0, str(self.board_size))
         self._new_game()
+
 
     def _apply_size(self):
         bt = self.board_type.get()
@@ -350,6 +508,8 @@ class SimpleGUIDemo:
 
     def run(self):
         self.root.mainloop()
+
+
 
 
 if __name__ == "__main__":
